@@ -1,37 +1,14 @@
 "use strict";
 
-class Looper {
-  constructor() {
-    this.log = evt => console.log(evt)
-  }
-  
-  use(port) {
-    let { port:prev, log } = this
-    console.log("LOG?", log, port)
-    if (prev) prev.removeEventListener('midimessage', log, true)
-    if (port) port.onmidimessage = function (msg) { console.log(msg); };
-    this.port = port
-    console.log("Using", port)
-  }
-}
-
-let looper = new Looper()
-
 
 const { createStore } = unistore
 
 let store = createStore({ inputs:null, input:null })
 
-let actions = store => ({
-  selectInput({ input:prev }, port) {
-    looper.use(port)
-  }
-})
-
 const { Component, render, h } = preact
 const { Provider, connect } = unistore
 
-let SourceSelector = ({ inputs }) => h('div', {class:"source-selector"},
+let SourceSelector = ({ inputs, input }) => h('div', {class:"source-selector"},
   h('h2', {}, "MIDI Input"),
   (inputs) ? h('select', {
     onChange: evt => {
@@ -39,31 +16,68 @@ let SourceSelector = ({ inputs }) => h('div', {class:"source-selector"},
       looper.use(inputs[idx] || null)
     }
   },
-    h('option', {}, '---'),
+    h('option', {selected:!input}, '---'),
     inputs.map(obj => h('option', {
-      'myprop': obj
+      selected: (obj === input)
     }, obj.name))
-  ) : h('span', {}, "No inputs.")
+  ) : h('span', {}, "No MIDI access!")
 )
 
-let App = connect(s => s)(({ inputs }) => h('div', {},
-  h(SourceSelector, {inputs})
+let App = connect(s => s)(({ inputs,input }) => h('div', {},
+  h(SourceSelector, {inputs,input})
 ))
 
-render(h(Provider, {store},
-  h(App)
-), document.getElementById('app'))
+render(h(Provider, {store}, h(App)), document.getElementById('app'))
 
 
-async function run() {
-  try {
-    // TODO: move this to Looper
-    let midi = await navigator.requestMIDIAccess(/*{sysex:true}*/)
-    let inputs = Array.from(midi.inputs.values())
-    store.setState({inputs})
-  } catch (e) {
-    console.error("Failed to gain MIDI access.", e)
+class Looper {
+  constructor(store) {
+    this.store = store
+    this._bindMarkedMethods()
+  }
+  _bindMarkedMethods() {
+    // ~HACK: fill in for missing https://tc39.github.io/proposal-class-public-fields/
+    const P = "BIND_"
+    Object.getOwnPropertyNames(Object.getPrototypeOf(this)).forEach(k => {
+      if (k.indexOf(P) === 0) {
+        this[k.slice(P.length)] = this[k].bind(this)
+      }
+    })
+  }
+  
+  async start() {
+    try {
+      this.midi = await navigator.requestMIDIAccess(/*{sysex:true}*/)
+      this.midi.addEventListener('statechange', this.updatePorts, false)
+      this.updatePorts()
+    } catch (e) {
+      console.error("Failed to gain MIDI access.", e)
+    }
+  }
+  
+  stop() {
+    this.midi.removeEventListener('statechange', this.updatePorts, false)
+    this.midi = null
+  }
+  
+  BIND_updatePorts() {
+    let inputs = Array.from(this.midi.inputs.values())
+    let {input} = store.getState()
+    if (input && input.state === 'disconnected') this.use(input = null)
+    this.store.setState({inputs})
+  }
+  
+  BIND_handleMessage(evt) {
+    console.log(evt)
+  }
+  
+  use(port) {
+    let { input:prev } = this.store.getState()
+    if (prev) prev.removeEventListener('midimessage', this.handleMessage, false)
+    if (port) port.addEventListener('midimessage', this.handleMessage, false)
+    this.store.setState({input:port})
   }
 }
 
-run()
+let looper = new Looper(store)
+looper.start()
