@@ -29,6 +29,54 @@ let App = connect(s => s)(({ inputs,input }) => h('div', {},
 
 render(h(Provider, {store}, h(App)), document.getElementById('app'))
 
+class Beeper {
+  constructor() {
+    this.ctx = new AudioContext()
+    this.notes = Object.create(null)
+  }
+  
+  _freshOscillator() {
+    let osc = this.ctx.createOscillator()
+    let vol = this.ctx.createGain()
+    osc.connect(osc._gainNode = vol)
+    vol.connect(this.ctx.destination)
+    vol.gain.value = 0    // n.b.
+    osc.type = 'sawtooth'
+    return osc
+  }
+  
+  _noteToFrequency(n) {
+    return 440 * 2 ** ((n - 69) / 12)
+  }
+  
+  _velocityToGain(v) {
+    return v / 128 / 10
+  }
+  
+  playNote(n,v) {
+    let osc = this.notes[n] || this._freshOscillator()
+    osc.frequency.value = this._noteToFrequency(n)
+    osc._gainNode.gain.setTargetAtTime(this._velocityToGain(v), 0, 0.02)
+    if (!this.notes[n]) {
+      this.notes[n] = osc
+      osc.start()
+    }
+  }
+  
+  stopNote(n) {
+    let osc = this.notes[n]
+    if (osc) {
+      osc._gainNode.gain.setTargetAtTime(0,0,0.1)
+      setTimeout(_ => {   // ~HACK: clean up eventually
+        osc.stop()
+        // TODO: need we disconnect?
+      }, 1e3)
+    }
+    delete this.notes[n]
+  }
+  
+  
+}
 
 class Looper {
   constructor(store) {
@@ -45,7 +93,8 @@ class Looper {
     })
   }
   
-  async start() {
+  async start(beeper) {
+    this.beeper = beeper
     try {
       this.midi = await navigator.requestMIDIAccess(/*{sysex:true}*/)
       this.midi.addEventListener('statechange', this.updatePorts, false)
@@ -58,6 +107,7 @@ class Looper {
   stop() {
     this.midi.removeEventListener('statechange', this.updatePorts, false)
     this.midi = null
+    this.beeper = null
   }
   
   BIND_updatePorts() {
@@ -68,7 +118,15 @@ class Looper {
   }
   
   BIND_handleMessage(evt) {
-    console.log(evt)
+    let [status, data1, data2] = evt.data
+    switch (status >> 4) {
+      case 0x8:
+        this.beeper.stopNote(data1)
+        break
+      case 0x9:
+        this.beeper.playNote(data1, data2)
+        break
+    }
   }
   
   use(port) {
@@ -79,5 +137,6 @@ class Looper {
   }
 }
 
-let looper = new Looper(store)
-looper.start()
+let beeper = new Beeper(),
+    looper = new Looper(store)
+looper.start(beeper)
