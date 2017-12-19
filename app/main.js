@@ -114,7 +114,8 @@ class Looper {
     let inputs = Array.from(this.midi.inputs.values())
     let {input} = store.getState()
     if (input && input.state === 'disconnected') this.use(input = null)
-    this.store.setState({inputs})
+    this.store.setState({inputs,input})
+    if (!input && inputs.length === 1) this.use(input = inputs[0])
   }
   
   BIND_handleMessage(evt) {
