@@ -199,7 +199,7 @@ class Looper {
 console.log( (this.recording) ? "RECORDING" : "PLAYING" )
   }
   
-  _queueRepeat(nextStart) {
+  _queueRepeat(nextStart) {     // TODO: split into "track" class that queues only ~30ms of events
     let offset = nextStart - this.startTime
     this.events.forEach(({data,time}) => this.beeper.send(data,time+offset))
   }
@@ -208,11 +208,12 @@ console.log( (this.recording) ? "RECORDING" : "PLAYING" )
     this.playing = true
     let interval = this.endTime - this.startTime
     let trigger = function (now=performance.now()) {
+      if (!this.playing) return
+      
       let elapsed = now - this.endTime
       let idx = Math.ceil(elapsed / interval)
       this._queueRepeat(this.endTime + idx * interval)
-      
-      if (this.playing) setTimeout(trigger, interval - 50)
+      setTimeout(trigger, interval - 50)
     }.bind(this)
     trigger(this.endTime)
   }
