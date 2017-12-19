@@ -164,7 +164,7 @@ class Looper {
       data: evt.data,
       time: evt.timeStamp
     })
-    this.beeper.send(evt.data, evt.timeStamp/* + 1000*/)
+    this.beeper.send(evt.data, evt.timeStamp)
   }
   
   use(port) {
@@ -194,9 +194,21 @@ class Looper {
 console.log( (this.recording) ? "RECORDING" : "PLAYING" )
   }
   
+  _queueRepeat(i) {
+    let nextStart = performance.now() + i * (this.endTime - this.startTime)
+    let offset = nextStart - this.startTime
+    this.events.forEach(({data,time}) => this.beeper.send(data,time+offset))
+  }
+  
   
   startPlayback() {
-    
+    let i = 0
+    let delay = this.endTime - this.startTime - 0.5
+    let trigger = function () {
+      this._queueRepeat(i++)
+      setTimeout(trigger, delay / 1000)
+    }.bind(this)
+    trigger()
   }
   
   stopPlayback() {}
