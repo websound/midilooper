@@ -23,11 +23,34 @@ let SourceSelector = ({ inputs, input }) => h('div', {class:"source-selector"},
   ) : h('span', {}, "No MIDI access!")
 )
 
+class RecordButton extends Component {
+  constructor(props) {
+    super(props)
+    bindMarkedMethods.call(this) 
+  }
+  
+  BIND_handleToggle(evt) {
+    if (evt.type === 'click' || evt.code === "Space") looper.toggleRecording(evt)
+  }
+  
+  componentDidMount() {
+    window.addEventListener('keyup', this.handleToggle, false)
+  }
+  componentWillUnmount() {
+    window.removeEventListener('keyup', this.handleToggle, false)
+  }
+  render() {
+    return h('button', {type:'button',onClick:this.handleToggle}, "Record")
+  }
+}
+
 let App = connect(s => s)(({ inputs,input }) => h('div', {},
-  h(SourceSelector, {inputs,input})
+  h(SourceSelector, {inputs,input}),
+  h(RecordButton, {})
 ))
 
 render(h(Provider, {store}, h(App)), document.getElementById('app'))
+
 
 class Beeper {
   constructor() {
@@ -35,13 +58,14 @@ class Beeper {
     this.notes = Object.create(null)
   }
   
-  _freshOscillator() {
+  _freshOscillator(freq) {
     let osc = this.ctx.createOscillator()
     let vol = this.ctx.createGain()
     osc.connect(osc._gainNode = vol)
     vol.connect(this.ctx.destination)
-    vol.gain.value = 0    // n.b.
+    vol.gain.setValueAtTime(0,0)    // n.b.
     osc.type = 'sawtooth'
+    osc.frequency.setValueAtTime(freq,0)
     return osc
   }
   
@@ -53,44 +77,61 @@ class Beeper {
     return v / 128 / 10
   }
   
-  playNote(n,v) {
-    let osc = this.notes[n] || this._freshOscillator()
-    osc.frequency.value = this._noteToFrequency(n)
-    osc._gainNode.gain.setTargetAtTime(this._velocityToGain(v), 0, 0.02)
-    if (!this.notes[n]) {
-      this.notes[n] = osc
+  _hiresToTime(t) {
+    // see https://webaudio.github.io/web-audio-api/#dom-audiocontext-getoutputtimestamp
+    var at = this.ctx.getOutputTimestamp()
+    return at.contextTime + (t - at.performanceTime) / 1000
+  }
+  
+  schedule(n,v,t=0,c=0) {
+    let osc = this.notes[n]
+    if (!osc) {
+      this.notes[n] = osc = this._freshOscillator(this._noteToFrequency(n))
       osc.start()
     }
+    osc._gainNode.gain.setTargetAtTime(this._velocityToGain(v), this._hiresToTime(t), c)
+    // TODO: clean up oscillators when they haven't been heard for a while?
   }
   
-  stopNote(n) {
-    let osc = this.notes[n]
-    if (osc) {
-      osc._gainNode.gain.setTargetAtTime(0,0,0.1)
-      setTimeout(_ => {   // ~HACK: clean up eventually
-        osc.stop()
-        // TODO: need we disconnect?
-      }, 1e3)
+  playNote(n,v,t=0) {
+    this.schedule(n,v,t,0.1)
+  }
+  
+  stopNote(n,t=0) {
+    this.schedule(n,0,t,0.05)
+  }
+  
+  // c.f. https://www.w3.org/TR/webmidi/#midioutput-interface
+  send(bytes, ts=0) {
+    // TODO: handle multiple messages
+    
+    let [status, data1, data2] = bytes
+    switch (status >> 4) {
+      case 0x8:
+        this.stopNote(data1, ts)
+        break
+      case 0x9:
+        this.playNote(data1, data2, ts)
+        break
     }
-    delete this.notes[n]
   }
-  
-  
 }
+
+function bindMarkedMethods() {
+  // ~HACK: fill in for missing https://tc39.github.io/proposal-class-public-fields/
+  const P = "BIND_"
+  Object.getOwnPropertyNames(Object.getPrototypeOf(this)).forEach(k => {
+    if (k.indexOf(P) === 0) {
+      this[k.slice(P.length)] = this[k].bind(this)
+    }
+  })
+}
+
 
 class Looper {
   constructor(store) {
     this.store = store
-    this._bindMarkedMethods()
-  }
-  _bindMarkedMethods() {
-    // ~HACK: fill in for missing https://tc39.github.io/proposal-class-public-fields/
-    const P = "BIND_"
-    Object.getOwnPropertyNames(Object.getPrototypeOf(this)).forEach(k => {
-      if (k.indexOf(P) === 0) {
-        this[k.slice(P.length)] = this[k].bind(this)
-      }
-    })
+    bindMarkedMethods.call(this)
   }
   
   async start(beeper) {
@@ -119,15 +160,11 @@ class Looper {
   }
   
   BIND_handleMessage(evt) {
-    let [status, data1, data2] = evt.data
-    switch (status >> 4) {
-      case 0x8:
-        this.beeper.stopNote(data1)
-        break
-      case 0x9:
-        this.beeper.playNote(data1, data2)
-        break
-    }
+    if (this.recording) this.events.push({
+      data: evt.data,
+      time: evt.timeStamp
+    })
+    this.beeper.send(evt.data, evt.timeStamp/* + 1000*/)
   }
   
   use(port) {
@@ -136,6 +173,33 @@ class Looper {
     if (port) port.addEventListener('midimessage', this.handleMessage, false)
     this.store.setState({input:port})
   }
+  
+  startRecording(ts) {
+    this.events = []
+    this.startTime = ts
+    this.recording = true
+  }
+  
+  stopRecording(ts) {
+    this.endTime = ts
+    this.recording = false
+  }
+  
+  toggleRecording(evt) {
+    if (!this.recording) this.startRecording(evt.timeStamp)
+    else {
+      this.stopRecording(evt.timeStamp)
+      this.startPlayback()
+    }
+console.log( (this.recording) ? "RECORDING" : "PLAYING" )
+  }
+  
+  
+  startPlayback() {
+    
+  }
+  
+  stopPlayback() {}
 }
 
 let beeper = new Beeper(),
