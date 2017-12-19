@@ -54,6 +54,16 @@ let App = connect(s => s)(({ inputs,input }) => h('div', {},
 ))
 
 
+function bindMarkedMethods() {
+  // ~HACK: fill in for missing https://tc39.github.io/proposal-class-public-fields/
+  const P = "BIND_"
+  Object.getOwnPropertyNames(Object.getPrototypeOf(this)).forEach(k => {
+    if (k.indexOf(P) === 0) {
+      this[k.slice(P.length)] = this[k].bind(this)
+    }
+  })
+}
+
 class Beeper {
   constructor() {
     this.ctx = new AudioContext()
@@ -122,16 +132,58 @@ class Beeper {
   }
 }
 
-function bindMarkedMethods() {
-  // ~HACK: fill in for missing https://tc39.github.io/proposal-class-public-fields/
-  const P = "BIND_"
-  Object.getOwnPropertyNames(Object.getPrototypeOf(this)).forEach(k => {
-    if (k.indexOf(P) === 0) {
-      this[k.slice(P.length)] = this[k].bind(this)
+class Track {
+  constructor(events, duration) {
+    bindMarkedMethods.call(this)
+    this.loop = false
+    this.output = beeper
+    
+    this._events = events
+    this._duration = duration
+    this._startTime = null
+    this._prevIndex = 0
+    this._groupTime = 30      // TODO: increase when page is backgrounded
+  }
+  
+  BIND_queueNextGroup() {
+    if (!this.playing) return
+    
+    let now = performance.now()
+    let evtOffset = this._startTime
+    let cutoffTime = now + this._groupTime
+    
+    let nextTime = null
+    let evtIdx = this._prevIndex
+    while (evtIdx < this._events.length) {
+      let {data, time:_time} = this._events[evtIdx]
+      let time = _time + evtOffset
+      if (time > cutoffTime) {
+        nextTime = time
+        break;
+      }
+      this.output.send(data,time)
+      evtIdx += 1
     }
-  })
+    this._prevIndex = evtIdx
+    if (nextTime) {
+      setTimeout(this.queueNextGroup, nextTime - now)
+    } else if (this.loop) {
+      this.play(this._startTime + this._duration)
+    }
+  }
+  
+  play(t=performance.now()) {
+    this._startTime = t
+    this._prevIndex = 0
+    this.playing = true
+    if (this._events.length) this.queueNextGroup()
+  }
+  
+  stop() {
+    this.playing = false
+    this.output.clear()
+  }
 }
-
 
 class Looper {
   constructor(store) {
@@ -207,22 +259,15 @@ class Looper {
   }
   
   startPlayback() {
-    this.playing = true
-    let interval = this.endTime - this.startTime
-    let trigger = function (now=performance.now()) {
-      if (!this.playing) return
-      
-      let elapsed = now - this.endTime
-      let idx = Math.ceil(elapsed / interval)
-      this._queueRepeat(this.endTime + idx * interval)
-      setTimeout(trigger, interval - 50)
-    }.bind(this)
-    trigger(this.endTime)
+    let events = this.events.map(({data,time}) => ({data,time:time-this.startTime}))
+    let duration = this.endTime - this.startTime
+    this.track = new Track(events,duration)
+    this.track.loop = true
+    this.track.play(this.endTime)
   }
   
   stopPlayback() {
-    this.playing = false
-    this.beeper.clear()
+    if (this.track) this.track.stop()
   }
 }
 
