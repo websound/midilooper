@@ -3,7 +3,7 @@
 
 const { createStore } = unistore
 
-let store = createStore({ inputs:null, input:null })
+let store = createStore({ inputs:null, input:null, status:null })
 
 const { Component, render, h } = preact
 const { Provider, connect } = unistore
@@ -30,7 +30,10 @@ class RecordButton extends Component {
   }
   
   BIND_handleToggle(evt) {
-    if (evt.type === 'click' || evt.code === "Space") looper.toggleRecording(evt)
+    if (evt.type === 'click' || evt.code === "Space") {
+      let recording = looper.toggleRecording(evt)
+      this.setState({recording})
+    }
   }
   
   componentDidMount() {
@@ -40,7 +43,8 @@ class RecordButton extends Component {
     window.removeEventListener('keyup', this.handleToggle, false)
   }
   render() {
-    return h('button', {type:'button',onClick:this.handleToggle}, "Record")
+    let recording = this.state.recording
+    return h('button', {type:'button',onClick:this.handleToggle}, (recording) ? "Play" : "Record")
   }
 }
 
@@ -48,8 +52,6 @@ let App = connect(s => s)(({ inputs,input }) => h('div', {},
   h(SourceSelector, {inputs,input}),
   h(RecordButton, {})
 ))
-
-render(h(Provider, {store}, h(App)), document.getElementById('app'))
 
 
 class Beeper {
@@ -196,7 +198,7 @@ class Looper {
       this.stopRecording(evt.timeStamp)
       this.startPlayback()
     }
-console.log( (this.recording) ? "RECORDING" : "PLAYING" )
+    return this.recording;
   }
   
   _queueRepeat(nextStart) {     // TODO: split into "track" class that queues only ~30ms of events
@@ -224,6 +226,9 @@ console.log( (this.recording) ? "RECORDING" : "PLAYING" )
   }
 }
 
+
 let beeper = new Beeper(),
     looper = new Looper(store)
 looper.start(beeper)
+
+render(h(Provider, {store}, h(App)), document.getElementById('app'))
