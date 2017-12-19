@@ -115,6 +115,9 @@ class Beeper {
         break
     }
   }
+  clear() {
+    // TODO: this should cancel buffered events… ours are ± already forwarded along
+  }
 }
 
 function bindMarkedMethods() {
@@ -186,32 +189,38 @@ class Looper {
   }
   
   toggleRecording(evt) {
-    if (!this.recording) this.startRecording(evt.timeStamp)
-    else {
+    if (!this.recording) {
+      this.stopPlayback()
+      this.startRecording(evt.timeStamp)
+    } else {
       this.stopRecording(evt.timeStamp)
       this.startPlayback()
     }
 console.log( (this.recording) ? "RECORDING" : "PLAYING" )
   }
   
-  _queueRepeat(i) {
-    let nextStart = performance.now() + i * (this.endTime - this.startTime)
+  _queueRepeat(nextStart) {
     let offset = nextStart - this.startTime
     this.events.forEach(({data,time}) => this.beeper.send(data,time+offset))
   }
   
-  
   startPlayback() {
-    let i = 0
-    let delay = this.endTime - this.startTime - 0.5
-    let trigger = function () {
-      this._queueRepeat(i++)
-      setTimeout(trigger, delay / 1000)
+    this.playing = true
+    let interval = this.endTime - this.startTime
+    let trigger = function (now=performance.now()) {
+      let elapsed = now - this.endTime
+      let idx = Math.ceil(elapsed / interval)
+      this._queueRepeat(this.endTime + idx * interval)
+      
+      if (this.playing) setTimeout(trigger, interval - 50)
     }.bind(this)
-    trigger()
+    trigger(this.endTime)
   }
   
-  stopPlayback() {}
+  stopPlayback() {
+    this.playing = false
+    this.beeper.clear()
+  }
 }
 
 let beeper = new Beeper(),
