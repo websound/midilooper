@@ -140,6 +140,38 @@ class Beeper {
   }
 }
 
+class NoteWatcher {
+  constructor() {
+    this.clear()
+  }
+  
+  send(msg) {
+    let [status, n, v] = msg
+    let c = status & 0x0F;
+    switch (status >> 4) {
+      case 0x8:
+        delete this._notesByChannel[c][n]
+        break
+      case 0x9:
+        this._notesByChannel[c][n] = v
+        break
+    }
+  }
+  
+  clear() {
+    this._notesByChannel = Array(16).fill(null).map(_ => Object.create(null))
+  }
+  
+  eventsForActiveNotes(time, play) {
+    let s = (play) ? 0x90 : 0x80
+    let channelEvents = this._notesByChannel.map((notes, c) => Object.entries(notes).map(([n,v]) => ({
+      time, data: [s|c, n, (play) ? v : 0]
+    })))
+    return channelEvents.reduce((acc,arr) => [...acc, ...arr], [])
+  }
+  
+}
+
 class Track {
   constructor(events, duration) {
     bindMarkedMethods.call(this)
@@ -190,7 +222,7 @@ class Track {
   stop() {
     this.playing = false
     this.output.clear()
-    this.output.send([0xB0, 0x7B, 0])     // all notes off
+    //this.output.send([0xB0, 0x7B, 0])     // all notes off
   }
 }
 
@@ -226,7 +258,7 @@ class Looper {
   }
   
   BIND_handleMessage(evt) {
-    this.updateActiveNotes(evt.data)
+    this.noteWatcher.send(evt.data)
     if (this.recording) this.events.push({
       data: evt.data,
       time: evt.timeStamp
@@ -239,40 +271,18 @@ class Looper {
     if (prev) prev.removeEventListener('midimessage', this.handleMessage, false)
     if (port) port.addEventListener('midimessage', this.handleMessage, false)
     this.store.setState({input:port})
-    this.notesByChannel = Array(16).fill(null).map(_ => Object.create(null))
+    this.noteWatcher = new NoteWatcher()
   }
-  
-  updateActiveNotes(msg) {
-    let [status, n, v] = msg
-    let c = status & 0x0F;
-    switch (status >> 4) {
-      case 0x8:
-        delete this.notesByChannel[c][n]
-        break
-      case 0x9:
-        this.notesByChannel[c][n] = v
-        break
-    }
-  }
-  
-  eventsForActiveNotes(time, play) {
-    let s = (play) ? 0x90 : 0x80
-    let channelEvents = this.notesByChannel.map((notes, c) => Object.entries(notes).map(([n,v]) => ({
-      time, data: [s|c, n, (play) ? v : 0]
-    })))
-    return channelEvents.reduce((acc,arr) => [...acc, ...arr], [])
-  }
-  
   
   startRecording(ts) {
     this.events = []
-    this.events.push(...this.eventsForActiveNotes(ts, true))
+    this.events.push(...this.noteWatcher.eventsForActiveNotes(ts, true))
     this.startTime = ts
     this.recording = true
   }
   
   stopRecording(ts) {
-    this.events.push(...this.eventsForActiveNotes(ts, false))
+    this.events.push(...this.noteWatcher.eventsForActiveNotes(ts, false))
     this.endTime = ts
     this.recording = false
   }
