@@ -8,20 +8,41 @@ let store = createStore({ inputs:null, input:null, status:null })
 const { Component, render, h } = preact
 const { Provider, connect } = unistore
 
-let SourceSelector = ({ inputs, input }) => h('div', {class:"source-selector"},
-  h('h2', {}, "MIDI Input"),
-  (inputs) ? h('select', {
-    onChange: evt => {
-      let idx = evt.target.selectedIndex - 1  // (account for --- option)
-      looper.use(inputs[idx] || null)
-    }
-  },
-    h('option', {selected:!input}, '---'),
-    inputs.map(obj => h('option', {
-      selected: (obj === input)
-    }, obj.name))
-  ) : h('span', {}, "No MIDI access!")
+let Selector = ({ options, selectedOption, onSelect }) => h('select', {
+  onChange: evt => {
+    let idx = evt.target.selectedIndex - 1  // (account for --- option)
+    if (onSelect) onSelect(options[idx] || null)
+    
+  }
+},
+  h('option', {selected:!selectedOption}, '---'),
+  options.map(option => h('option', {
+    selected: (option === selectedOption)
+  }, option.name))
 )
+
+let InputSelector = ({ inputs, input }) => h('div', {class:"input port-selector"},
+  h('h2', {}, "Input"),
+  (inputs) ? h(Selector, {
+    options:inputs, selectedOption:input,
+    onSelect: input => looper.use(input)
+  }) : h('span', {}, "No MIDI access!")
+)
+
+let OutputSelector = ({ outputs, output }) => h('div', {class:"output port-selector"},
+  h('h2', {}, "Output"),
+  (outputs) ? h(Selector, {
+    options:outputs, selectedOption:output,
+    onSelect: output => looper.sendTo(output)
+  }) : h('span', {}, "No MIDI access!")
+)
+
+let MidiControls = ({ inputs,input, outputs,output }) => h('div', {class:"midi-controls"},
+  h(InputSelector, {inputs,input}),
+  h(OutputSelector, {outputs,output}),
+)
+
+
 
 class RecordButton extends Component {
   constructor(props) {
@@ -44,13 +65,15 @@ class RecordButton extends Component {
   }
   render() {
     let recording = this.state.recording
-    return h('button', {type:'button',onClick:this.handleToggle}, (recording) ? "Play" : "Record")
+    return h('button', {class:"main-switch",type:'button',onClick:this.handleToggle}, (recording) ? "Play" : "Record")
   }
 }
 
-let App = connect(s => s)(({ inputs,input }) => h('div', {},
-  h(SourceSelector, {inputs,input}),
-  h(RecordButton, {})
+let App = connect(s => s)(({ inputs,input, outputs,output }) => h('div', {},
+  h(MidiControls, {inputs,input,outputs,output}),
+  h('br'),
+  h(RecordButton, {}),
+  
 ))
 
 
@@ -65,7 +88,8 @@ function bindMarkedMethods() {
 }
 
 class Beeper {
-  constructor() {
+  constructor(name) {
+    this.name = name
     this.ctx = new AudioContext()
     this.notes = Object.create(null)
   }
@@ -176,7 +200,7 @@ class Track {
   constructor(events, duration) {
     bindMarkedMethods.call(this)
     this.loop = false
-    this.output = beeper
+    this.output = null
     
     this._events = events
     this._duration = duration
@@ -202,7 +226,7 @@ class Track {
         break;
       }
       this._watcher.send(data)
-      this.output.send(data,time)
+      if (this.output) this.output.send(data,time)
       evtIdx += 1
     }
     this._prevIndex = evtIdx
@@ -231,11 +255,11 @@ class Track {
 class Looper {
   constructor(store) {
     this.store = store
+    this.noteWatcher = new NoteWatcher()
     bindMarkedMethods.call(this)
   }
   
-  async start(beeper) {
-    this.beeper = beeper
+  async start() {
     try {
       this.midi = await navigator.requestMIDIAccess(/*{sysex:true}*/)
       this.midi.addEventListener('statechange', this.updatePorts, false)
@@ -248,15 +272,20 @@ class Looper {
   stop() {
     this.midi.removeEventListener('statechange', this.updatePorts, false)
     this.midi = null
-    this.beeper = null
   }
   
   BIND_updatePorts() {
     let inputs = Array.from(this.midi.inputs.values())
     let {input} = store.getState()
     if (input && input.state === 'disconnected') this.use(input = null)
+    if (!input) this.use(input = inputs[0])
     this.store.setState({inputs,input})
-    if (!input && inputs.length === 1) this.use(input = inputs[0])
+    
+    let outputs = [beeper, ...this.midi.outputs.values()]
+    let {output} = store.getState()
+    if (output && output.state === 'disconnected') this.sendTo(output = null)
+    if (!output) this.sendTo(output = outputs[0])
+    this.store.setState({outputs,output})
   }
   
   BIND_handleMessage(evt) {
@@ -265,7 +294,7 @@ class Looper {
       data: evt.data,
       time: evt.timeStamp
     })
-    this.beeper.send(evt.data, evt.timeStamp)
+    if (this.output) this.output.send(evt.data, evt.timeStamp)
   }
   
   use(port) {
@@ -273,18 +302,23 @@ class Looper {
     if (prev) prev.removeEventListener('midimessage', this.handleMessage, false)
     if (port) port.addEventListener('midimessage', this.handleMessage, false)
     this.store.setState({input:port})
-    this.noteWatcher = new NoteWatcher()
   }
+  
+  sendTo(port) {
+    this.output = port
+    if (this.track) this.track.output = port
+  }
+  
   
   startRecording(ts) {
     this.events = []
-    this.events.push(...this.noteWatcher.messages(ts, true).map(data => ({time:ts,data})))
+    this.events.push(...this.noteWatcher.messages(true).map(data => ({time:ts,data})))
     this.startTime = ts
     this.recording = true
   }
   
   stopRecording(ts) {
-    this.events.push(...this.noteWatcher.messages(ts, false).map(data => ({time:ts,data})))
+    this.events.push(...this.noteWatcher.messages(false).map(data => ({time:ts,data})))
     this.endTime = ts
     this.recording = false
   }
@@ -304,6 +338,7 @@ class Looper {
     let events = this.events.map(({data,time}) => ({data,time:time-this.startTime}))
     let duration = this.endTime - this.startTime
     this.track = new Track(events,duration)
+    this.track.output = this.output
     this.track.loop = true
     this.track.play(this.endTime)
   }
@@ -314,8 +349,8 @@ class Looper {
 }
 
 
-let beeper = new Beeper(),
+let beeper = new Beeper("Soft Synth"),
     looper = new Looper(store)
-looper.start(beeper)
+looper.start()
 
 render(h(Provider, {store}, h(App)), document.getElementById('app'))
