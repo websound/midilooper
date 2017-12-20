@@ -162,11 +162,11 @@ class NoteWatcher {
     this._notesByChannel = Array(16).fill(null).map(_ => Object.create(null))
   }
   
-  eventsForActiveNotes(time, play) {
+  messages(play) {
     let s = (play) ? 0x90 : 0x80
-    let channelEvents = this._notesByChannel.map((notes, c) => Object.entries(notes).map(([n,v]) => ({
-      time, data: [s|c, n, (play) ? v : 0]
-    })))
+    let channelEvents = this._notesByChannel.map((notes, c) => Object.entries(notes).map(([n,v]) => (
+      [s|c, n, (play) ? v : 0]
+    )))
     return channelEvents.reduce((acc,arr) => [...acc, ...arr], [])
   }
   
@@ -201,6 +201,7 @@ class Track {
         nextTime = time
         break;
       }
+      this._watcher.send(data)
       this.output.send(data,time)
       evtIdx += 1
     }
@@ -215,14 +216,15 @@ class Track {
   play(t=performance.now()) {
     this._startTime = t
     this._prevIndex = 0
+    this._watcher = new NoteWatcher()
     this.playing = true
     if (this._events.length) this.queueNextGroup()
   }
   
   stop() {
     this.playing = false
-    this.output.clear()
-    //this.output.send([0xB0, 0x7B, 0])     // all notes off
+    this._watcher.messages(false).forEach(msg => this.output.send(msg))
+    this._watcher = null
   }
 }
 
@@ -276,13 +278,13 @@ class Looper {
   
   startRecording(ts) {
     this.events = []
-    this.events.push(...this.noteWatcher.eventsForActiveNotes(ts, true))
+    this.events.push(...this.noteWatcher.messages(ts, true).map(data => ({time:ts,data})))
     this.startTime = ts
     this.recording = true
   }
   
   stopRecording(ts) {
-    this.events.push(...this.noteWatcher.eventsForActiveNotes(ts, false))
+    this.events.push(...this.noteWatcher.messages(ts, false).map(data => ({time:ts,data})))
     this.endTime = ts
     this.recording = false
   }
