@@ -262,11 +262,6 @@ class Looper {
     return this.recording;
   }
   
-  _queueRepeat(nextStart) {     // TODO: split into "track" class that queues only ~30ms of events
-    let offset = nextStart - this.startTime
-    this.events.forEach(({data,time}) => this.beeper.send(data,time+offset))
-  }
-  
   startPlayback() {
     let events = this.events.map(({data,time}) => ({data,time:time-this.startTime}))
     let duration = this.endTime - this.startTime
