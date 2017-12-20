@@ -1,0 +1,14 @@
+body {
+  font-family: sans-serif;
+}
+
+.midi-controls {
+  float: left;
+  margin: 0 1em;
+}
+
+.main-switch {
+  display: block;
+  margin: 0.5em auto;
+  font-size: 5em;
+}
