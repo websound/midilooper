@@ -90,6 +90,7 @@ class Beeper {
   }
   
   _hiresToTime(t) {
+    if (t === 0) t = performance.now()
     // see https://webaudio.github.io/web-audio-api/#dom-audiocontext-getoutputtimestamp
     var at = this.ctx.getOutputTimestamp()
     return at.contextTime + (t - at.performanceTime) / 1000
@@ -113,6 +114,10 @@ class Beeper {
     this.schedule(n,0,t,0.05)
   }
   
+  stopAll(t=0) {
+    Object.keys(this.notes).forEach(n => this.schedule(n,0,t,0))
+  }
+  
   // c.f. https://www.w3.org/TR/webmidi/#midioutput-interface
   send(bytes, ts=0) {
     // TODO: handle multiple messages
@@ -124,6 +129,9 @@ class Beeper {
         break
       case 0x9:
         this.playNote(data1, data2, ts)
+        break
+      case 0xB:
+        if (data1 === 0x7B) this.stopAll(ts)
         break
     }
   }
@@ -182,6 +190,7 @@ class Track {
   stop() {
     this.playing = false
     this.output.clear()
+    this.output.send([0xB0, 0x7B, 0])     // all notes off
   }
 }
 
