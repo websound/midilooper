@@ -226,6 +226,7 @@ class Looper {
   }
   
   BIND_handleMessage(evt) {
+    this.updateActiveNotes(evt.data)
     if (this.recording) this.events.push({
       data: evt.data,
       time: evt.timeStamp
@@ -238,15 +239,38 @@ class Looper {
     if (prev) prev.removeEventListener('midimessage', this.handleMessage, false)
     if (port) port.addEventListener('midimessage', this.handleMessage, false)
     this.store.setState({input:port})
+    this.notes = Object.create(null)
   }
+  
+  updateActiveNotes(msg) {
+    let [status, n, v] = msg
+    switch (status >> 4) {
+      case 0x8:
+        delete this.notes[n]
+        break
+      case 0x9:
+        this.notes[n] = v
+        break
+    }
+  }
+  
+  eventsForActiveNotes(time, play) {
+    let status = (play) ? 0x90 : 0x80   // TODO: channel
+    return Object.entries(this.notes).map(([n,v]) => ({
+      time, data: [status, n, (status === 0x90) ? v : 0]
+    }))
+  }
+  
   
   startRecording(ts) {
     this.events = []
+    this.events.push(...this.eventsForActiveNotes(ts, true))
     this.startTime = ts
     this.recording = true
   }
   
   stopRecording(ts) {
+    this.events.push(...this.eventsForActiveNotes(ts, false))
     this.endTime = ts
     this.recording = false
   }
