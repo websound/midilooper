@@ -239,26 +239,28 @@ class Looper {
     if (prev) prev.removeEventListener('midimessage', this.handleMessage, false)
     if (port) port.addEventListener('midimessage', this.handleMessage, false)
     this.store.setState({input:port})
-    this.notes = Object.create(null)
+    this.notesByChannel = Array(16).fill(null).map(_ => Object.create(null))
   }
   
   updateActiveNotes(msg) {
     let [status, n, v] = msg
+    let c = status & 0x0F;
     switch (status >> 4) {
       case 0x8:
-        delete this.notes[n]
+        delete this.notesByChannel[c][n]
         break
       case 0x9:
-        this.notes[n] = v
+        this.notesByChannel[c][n] = v
         break
     }
   }
   
   eventsForActiveNotes(time, play) {
-    let status = (play) ? 0x90 : 0x80   // TODO: channel
-    return Object.entries(this.notes).map(([n,v]) => ({
-      time, data: [status, n, (status === 0x90) ? v : 0]
-    }))
+    let s = (play) ? 0x90 : 0x80
+    let channelEvents = this.notesByChannel.map((notes, c) => Object.entries(notes).map(([n,v]) => ({
+      time, data: [s|c, n, (play) ? v : 0]
+    })))
+    return channelEvents.reduce((acc,arr) => [...acc, ...arr], [])
   }
   
   
